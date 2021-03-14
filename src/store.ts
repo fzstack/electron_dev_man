@@ -1,4 +1,4 @@
-import { action, autorun, makeObservable, observable } from 'mobx';
+import { action, autorun, computed, makeObservable, observable } from 'mobx';
 import MqttClient from '@/utilities/mqtt_client'
 
 
@@ -14,10 +14,24 @@ type DeviceCallbacks = Pick<{
   'auth': () => void,
 }, DeviceEvents>;
 
+type DeviceConstProps = {
+  gateway: string,
+} & ({
+  id: string,
+} | {
+  sn: string,
+});
+
+enum DeviceType {
+  WG = 10,
+  YL = 11,
+  LF = 12,
+  QJ = 13,
+}
+
 export class Device {
-  gateway?: string;
-  id?: string;
-  sn?: string;
+  readonly id: string;
+  readonly gateway: string;
   name?: string;
   value?: object;
 
@@ -27,26 +41,38 @@ export class Device {
   private callbacks: Partial<DeviceCallbacks> = {};
 
 
-  constructor(private outter: DeviceStore) {
+  constructor(private outter: DeviceStore, props: DeviceConstProps) {
     makeObservable(this, {
       gateway: observable,
       id: observable,
-      sn: observable,
+      sn: computed,
       name: observable,
       value: observable,
       authState: observable,
       authTime: observable,
       auth: action,
     });
+
+    if('id' in props) {
+      this.id = props.id;
+    } else if('sn' in props) {
+      this.id = Device.snToDid(props.sn);
+    } else {
+      throw new Error('id prop incorrect');
+    }
+    this.gateway = props.gateway;
+  }
+
+  get sn(): string {
+    return Device.didToSn(this.id);
+  }
+
+  get type(): DeviceType {
+    return parseInt(this.id.slice(0, 2));
   }
 
   async auth() {
     if(this.authState) return;
-
-    if(this.gateway == null || this.id == null) {
-      throw new Error('sn');
-    }
-
     await this.outter.client.pub(this.gateway, `$cmd=set_did_key&device_sn=${this.sn}&did=${this.id}&key=${this.id.padStart(36, '0')}`)
     this.authState = true;
     this.authTime = new Date();
@@ -54,68 +80,39 @@ export class Device {
   }
 
   async reset() {
-    if(this.sn == null || this.gateway == null) {
-      throw new Error('reset while sn is null');
-    }
-    await this.outter.client.pub(this.gateway, `$cmd=autoinitialvalue&device_sn=${this.sn}`);
+    await this.pub(`$cmd=autoinitialvalue&device_sn=${this.sn}`);
   }
 
   async sample() {
-    if(this.sn == null || this.gateway == null) {
-      throw new Error('reset while sn is null');
-    }
-
-    await this.outter.client.pub(this.gateway, `$cmd=sample&device_sn=${this.sn}`);
+    await this.pub(`$cmd=sample&device_sn=${this.sn}`);
   }
 
   async factory() {
-    if(this.sn == null || this.gateway == null) {
-      throw new Error('reset while sn is null');
-    }
-
-    await this.outter.client.pub(this.gateway, `$cmd=FactoryStatus&device_sn=${this.sn}`);
+    await this.pub(`$cmd=FactoryStatus&device_sn=${this.sn}`);
   }
 
   async setUploadDuration(dur: number) {
-    if(this.sn == null || this.gateway == null) {
-      throw new Error('reset while sn is null');
-    }
-    await this.outter.client.pub(this.gateway, `$cmd=set_state_intv&device_sn=${this.sn}&state_intv=${dur}`);
+    await this.pub(`$cmd=set_state_intv&device_sn=${this.sn}&state_intv=${dur}`);
   }
 
   async setMoniTime(moniTimes: number[]) {
-    if(this.sn == null || this.gateway == null) {
-      throw new Error('reset while sn is null');
-    }
-    await this.outter.client.pub(this.gateway, `$cmd=test_intv&time0=${moniTimes[0]}&time1=${moniTimes[1]}&time2=${moniTimes[2]}&time3=${moniTimes[3]}&time4=${moniTimes[4]}`);
-  }
-
-  genDid(): string {
-    if(this.sn == null)
-      throw new Error('sn');
-
-    return new Map([
-      ['WG', '10'],
-      ['YL', '11'],
-      ['LF', '12'],
-      ['QJ', '13'],
-    ]).get(this.sn.slice(0, 2)) + this.sn.slice(-4);
-  }
-
-  getSn(): string {
-    if(this.id == null)
-      throw new Error('id');
-
-    return `${new Map([
-      ['10', 'WG'],
-      ['11', 'YL'],
-      ['12', 'LF'],
-      ['13', 'QJ'],
-    ]).get(this.id.substr(0, 2))}0121000000${this.id.substr(-4)}`;
+    await this.pub(`$cmd=test_intv&time0=${moniTimes[0]}&time1=${moniTimes[1]}&time2=${moniTimes[2]}&time3=${moniTimes[3]}&time4=${moniTimes[4]}`);
   }
 
   on<T extends keyof DeviceCallbacks>(event: T, callback: DeviceCallbacks[T]) {
     this.callbacks[event] = callback;
+  }
+
+  private async pub(msg: string) {
+    await this.outter.client.pub(this.gateway, msg);
+  }
+
+  private static didToSn(did: string): string {
+    return `${DeviceType[parseInt(did.substr(0, 2))]}0121000000${did.substr(-4)}`;
+  }
+
+  private static snToDid(sn: string): string {
+    return String(DeviceType[sn.slice(0, 2) as keyof typeof DeviceType]).padStart(2) + sn.slice(-4);
   }
 }
 
@@ -123,12 +120,14 @@ export class DeviceStore {
   devices: Device[] = [];
   origins: Origin[] = [];
   autoAuth: boolean = true;
+  online: boolean = false;
 
   constructor(public client: MqttClient) {
     makeObservable(this, {
       devices: observable,
       origins: observable,
       autoAuth: observable,
+      online: observable,
       setAutoAuth: action,
     });
 
@@ -146,12 +145,12 @@ export class DeviceStore {
 
           device = this.devices.find(device => device.id == id);
           if(device == null) {
-            device = new Device(this);
-            device.id = id;
-            device.sn = device.getSn();
+            device = new Device(this, {
+              id,
+              gateway: from,
+            });
             this.devices.push(device);
           }
-          device.gateway = from;
           device.name = name;
           device.value = value;
           device.authState = true;
@@ -160,45 +159,35 @@ export class DeviceStore {
         const cmd = params.get('cmd');
 
         if(cmd == 'get_did_key') {
-          const tmpDevice = new Device(this);
-          tmpDevice.sn = params.get('device_sn');
-          tmpDevice.id = tmpDevice.genDid();
-          tmpDevice.authState = false;
-          tmpDevice.gateway = from;
-          device = this.devices.find(device => device.id == tmpDevice.id);
-          if(device == null) {
-            device = tmpDevice;
-            this.devices.push(device);
-          }
+          const sn = params.get('device_sn');
+          if(sn != null) {
+            const tmpDevice = new Device(this, {
+              sn,
+              gateway: from,
+            });
+            device = this.devices.find(device => device.id == tmpDevice.id);
+            if(device == null) {
+              device = tmpDevice;
+              this.devices.push(device);
+            }
 
-          if(this.autoAuth) {
-            console.log('auto authing');
-            device.auth();
+            if(this.autoAuth) {
+              console.log('auto authing');
+              device.auth();
+            }
           }
         }
-
-        const sn = params.get('device_sn');
-        if(sn != null && device != null) {
-          device.sn = sn;
-        }
-
-
       } catch(e) {
 
       }
     }));
 
     this.client.on('origin', action((topic, payload) => {
-
       this.origins.push({topic, payload: payload.toString('utf8'), id: Math.random()})
       if(this.origins.length > 100) {
         this.origins.shift();
       }
     }));
-
-    autorun(() => {
-      console.log({devices: this.devices});
-    })
   }
 
   setAutoAuth(value: boolean) {

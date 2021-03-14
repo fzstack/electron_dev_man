@@ -156,8 +156,6 @@ const useStyles = makeStyles((theme) => ({
   statusBadget: ({isOnline}: {isOnline: boolean}) => ({
     transform: 'translate(4px, -1px) scale(0.8, 0.8)',
     backgroundColor: isOnline ? "#7cb342" : "#d32f2f",
-    //border: `1px solid ${theme.palette.primary.main}`,
-    //padding: '2px 2px',
   })
 }));
 
@@ -439,8 +437,6 @@ export default inject("deviceStore")(observer(({deviceStore}: {deviceStore: Devi
       </MenuItem>
     </Menu>
   );
-
-
 
   return (
     <div className={classes.root}>
