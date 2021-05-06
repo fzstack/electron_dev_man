@@ -22,7 +22,7 @@ type DeviceConstProps = {
   sn: string,
 });
 
-enum DeviceType {
+export enum DeviceType {
   WG = 10,
   YL = 11,
   LF = 12,
@@ -34,18 +34,16 @@ export class Device {
   readonly gateway: string;
   name?: string;
   value?: object;
-
   authState: boolean = false;
   authTime?: Date;
-
   private callbacks: Partial<DeviceCallbacks> = {};
-
 
   constructor(private outter: DeviceStore, props: DeviceConstProps) {
     makeObservable(this, {
       gateway: observable,
       id: observable,
       sn: computed,
+      type: computed,
       name: observable,
       value: observable,
       authState: observable,
@@ -129,10 +127,14 @@ export class DeviceStore {
       autoAuth: observable,
       online: observable,
       setAutoAuth: action,
+      addDevice: action,
     });
 
+    this.client.on('connected', action(() => {
+      this.online = true;
+    }));
+
     this.client.on('msg', action(msg => {
-      //this.msgs.push(msg);
       try {
         const from = msg.from();
         const params = msg.params();
@@ -170,9 +172,7 @@ export class DeviceStore {
               device = tmpDevice;
               this.devices.push(device);
             }
-
             if(this.autoAuth) {
-              console.log('auto authing');
               device.auth();
             }
           }
@@ -188,6 +188,15 @@ export class DeviceStore {
         this.origins.shift();
       }
     }));
+  }
+
+  addDevice(id: string, gateway: string): Device {
+    let device = this.devices.find(device => device.id == id);
+    if(device == null) {
+      device = new Device(this, {id, gateway});
+      this.devices.push(device);
+    }
+    return device;
   }
 
   setAutoAuth(value: boolean) {

@@ -2,11 +2,13 @@ import mqtt, { AsyncMqttClient } from 'async-mqtt';
 import Msg from './msg'
 import conf from '@/confs/mqtt';
 
-type Events = 'msg' | 'origin';
+type Events = 'msg' | 'origin' | 'connected' | 'disconnected';
 
 type Callbacks = Pick<{
   'msg': (msg: Msg) => void,
   'origin': (topic: string, payload: Buffer) => void,
+  'connected': () => void,
+  'disconnected': () => void,
 }, Events>;
 
 export default class {
@@ -18,7 +20,7 @@ export default class {
       username: conf.USERNAME,
       password: conf.PASSWORD,
     });
-
+    this.callbacks['connected']?.();
     await this.client.subscribe('+');
     console.log('mqtt connected');
 

@@ -7,10 +7,10 @@ import { Provider } from 'mobx-react';
 import { SnackbarProvider } from 'notistack';
 
 const client = new MqttClient();
+const deviceStore = new DeviceStore(client);
 (async () => {
   await client.connect();
 })();
-const deviceStore = new DeviceStore(client);
 
 (window as any).deviceStore = deviceStore;
 
